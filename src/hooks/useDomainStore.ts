@@ -11,7 +11,7 @@ export const useDomainStore = () => {
   const [isChecking, setIsChecking] = useState(false);
 
   // Add a new domain
-  const addDomain = useCallback((domainName: string) => {
+  const addDomain = useCallback(async (domainName: string) => {
     const normalizedDomain = domainName.toLowerCase().trim();
     
     // Check if domain already exists
@@ -29,10 +29,58 @@ export const useDomainStore = () => {
       history: []
     };
     
+    // 先添加到列表
     setDomains(prev => [...prev, newDomain]);
     
-    // 立即检查新域名
-    checkDomain(newDomain.id);
+    try {
+      console.log(`开始检查新添加的域名: ${normalizedDomain}`);
+      
+      // 立即检查新域名
+      const [securityStatus, spamhausStatus] = await Promise.all([
+        checkDomainSecurity(normalizedDomain),
+        checkSpamhausStatus(normalizedDomain)
+      ]);
+      
+      console.log(`域名 ${normalizedDomain} 检查完成:`, {
+        securityStatus,
+        spamhausStatus
+      });
+      
+      // 更新域名状态
+      setDomains(prev => prev.map(domain => 
+        domain.name === normalizedDomain
+          ? {
+              ...domain,
+              securityStatus,
+              spamhausStatus,
+              lastChecked: Date.now(),
+              isChecking: false,
+              history: [{
+                timestamp: Date.now(),
+                securityStatus,
+                spamhausStatus
+              }]
+            }
+          : domain
+      ));
+      
+      setLastChecked(Date.now());
+    } catch (error) {
+      console.error('检查新域名时出错:', error);
+      
+      // 更新为未知状态
+      setDomains(prev => prev.map(domain => 
+        domain.name === normalizedDomain
+          ? {
+              ...domain,
+              securityStatus: SecurityStatus.Unknown,
+              spamhausStatus: SpamhausStatus.Unknown,
+              lastChecked: Date.now(),
+              isChecking: false
+            }
+          : domain
+      ));
+    }
   }, [domains]);
 
   // Remove a domain
