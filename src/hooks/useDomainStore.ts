@@ -16,8 +16,11 @@ export const useDomainStore = () => {
     
     // Check if domain already exists
     if (domains.some(domain => domain.name.toLowerCase() === normalizedDomain)) {
+      console.log(`域名 ${normalizedDomain} 已存在`);
       return;
     }
+    
+    console.log(`开始添加域名: ${normalizedDomain}`);
     
     const newDomain: Domain = {
       id: Date.now().toString(),
@@ -142,7 +145,10 @@ export const useDomainStore = () => {
     
     // Find the domain to check
     const domainToCheck = domains.find(d => d.id === domainId);
-    if (!domainToCheck) return;
+    if (!domainToCheck) {
+      console.log(`未找到域名 ID: ${domainId}`);
+      return;
+    }
     
     try {
       console.log(`开始检查域名: ${domainToCheck.name}`);
@@ -169,14 +175,26 @@ export const useDomainStore = () => {
 
   // Check all domains
   const checkAllDomains = useCallback(async () => {
-    if (isChecking) return;
+    if (isChecking) {
+      console.log('已有检查正在进行中，跳过本次检查');
+      return;
+    }
     
+    if (domains.length === 0) {
+      console.log('没有需要检查的域名');
+      return;
+    }
+    
+    console.log(`开始检查所有域名，共 ${domains.length} 个`);
     setIsChecking(true);
+    
     try {
       // 串行检查所有域名，避免并发请求过多
       for (const domain of domains) {
+        console.log(`检查域名: ${domain.name}`);
         await checkDomain(domain.id);
       }
+      console.log('所有域名检查完成');
     } catch (error) {
       console.error('批量检查域名时出错:', error);
     } finally {
@@ -186,15 +204,20 @@ export const useDomainStore = () => {
 
   // 自动检查
   useEffect(() => {
-    // 立即执行一次检查
-    checkAllDomains();
+    if (domains.length > 0) {
+      console.log('初始化检查所有域名');
+      checkAllDomains();
+    }
     
-    // 设置定时器
-    const interval = setInterval(checkAllDomains, AUTO_CHECK_INTERVAL);
+    const interval = setInterval(() => {
+      if (domains.length > 0) {
+        console.log('执行定期域名安全检查');
+        checkAllDomains();
+      }
+    }, AUTO_CHECK_INTERVAL);
     
-    // 清理定时器
     return () => clearInterval(interval);
-  }, [checkAllDomains]);
+  }, [checkAllDomains, domains.length]);
 
   return {
     domains,
