@@ -1,38 +1,11 @@
 import { SecurityStatus, SpamhausStatus } from '../types/domain';
 
-// 缓存接口
-interface CacheEntry {
-  status: SecurityStatus | SpamhausStatus;
-  timestamp: number;
-  expiration?: number;
-}
-
-// 缓存存储
-const cache = new Map<string, CacheEntry>();
-
-// 缓存过期时间（15分钟）
-const CACHE_DURATION = 15 * 60 * 1000;
-
 // 请求延迟时间（1-3秒）
 const getRandomDelay = () => Math.floor(Math.random() * 2000) + 1000;
 
 // 重试配置
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 2000;
-
-// 检测源配置
-const SECURITY_CHECK_SOURCES = {
-  VIRUSTOTAL: {
-    enabled: true,
-    apiKey: process.env.VIRUSTOTAL_API_KEY,
-    endpoint: 'https://www.virustotal.com/vtapi/v2/url/report'
-  },
-  URLSCAN: {
-    enabled: true,
-    apiKey: process.env.URLSCAN_API_KEY,
-    endpoint: 'https://urlscan.io/api/v1/search/'
-  }
-};
 
 // API 配置
 const API_CONFIG = {
@@ -51,9 +24,6 @@ interface SafeBrowsingResponse {
     cacheDuration: string;
   }>;
 }
-
-// 本地缓存
-const localCache = new Map<string, CacheEntry>();
 
 // 生成 URL 表达式列表
 function generateUrlExpressions(url: string): string[] {
@@ -117,81 +87,6 @@ async function fetchWithRetry(url: string, options: RequestInit, retries = MAX_R
 }
 
 /**
- * 检查缓存是否有效
- */
-function isCacheValid(key: string): boolean {
-  const entry = cache.get(key);
-  if (!entry) return false;
-  
-  const now = Date.now();
-  return now - entry.timestamp < CACHE_DURATION;
-}
-
-/**
- * 使用 VirusTotal 检查域名
- */
-async function checkWithVirusTotal(domain: string): Promise<SecurityStatus> {
-  if (!SECURITY_CHECK_SOURCES.VIRUSTOTAL.enabled || !SECURITY_CHECK_SOURCES.VIRUSTOTAL.apiKey) {
-    return SecurityStatus.Unknown;
-  }
-
-  try {
-    const response = await fetchWithRetry(
-      `${SECURITY_CHECK_SOURCES.VIRUSTOTAL.endpoint}?apikey=${SECURITY_CHECK_SOURCES.VIRUSTOTAL.apiKey}&resource=${domain}`,
-      {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json'
-        }
-      }
-    );
-
-    const data = await response.json();
-    if (data.positives > 0) {
-      return SecurityStatus.Unsafe;
-    }
-    return SecurityStatus.Safe;
-  } catch (error) {
-    console.error('VirusTotal 检查失败:', error);
-    return SecurityStatus.Unknown;
-  }
-}
-
-/**
- * 使用 URLScan.io 检查域名
- */
-async function checkWithURLScan(domain: string): Promise<SecurityStatus> {
-  if (!SECURITY_CHECK_SOURCES.URLSCAN.enabled || !SECURITY_CHECK_SOURCES.URLSCAN.apiKey) {
-    return SecurityStatus.Unknown;
-  }
-
-  try {
-    const response = await fetchWithRetry(
-      `${SECURITY_CHECK_SOURCES.URLSCAN.endpoint}?q=domain:${domain}`,
-      {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-          'API-Key': SECURITY_CHECK_SOURCES.URLSCAN.apiKey
-        }
-      }
-    );
-
-    const data = await response.json();
-    if (data.results && data.results.length > 0) {
-      const latestScan = data.results[0];
-      if (latestScan.verdicts && latestScan.verdicts.overall && latestScan.verdicts.overall.malicious) {
-        return SecurityStatus.Unsafe;
-      }
-    }
-    return SecurityStatus.Safe;
-  } catch (error) {
-    console.error('URLScan 检查失败:', error);
-    return SecurityStatus.Unknown;
-  }
-}
-
-/**
  * 使用 Google Safe Browsing API 检查域名
  */
 async function checkWithGoogleSafeBrowsing(domain: string): Promise<SecurityStatus> {
@@ -208,83 +103,36 @@ async function checkWithGoogleSafeBrowsing(domain: string): Promise<SecurityStat
     const expressionHashes = await Promise.all(expressions.map(expr => generateSHA256Hash(expr)));
     const expressionHashPrefixes = expressionHashes.map(hash => getHashPrefix(hash));
     
-    // 检查本地缓存
-    for (const hash of expressionHashes) {
-      const cacheKey = `hash_${hash}`;
-      const cachedEntry = localCache.get(cacheKey);
-      
-      if (cachedEntry) {
-        if (cachedEntry.expiration && Date.now() > cachedEntry.expiration) {
-          localCache.delete(cacheKey);
-        } else {
-          console.log('使用缓存的检测结果:', cachedEntry.status);
-          return cachedEntry.status as SecurityStatus;
-        }
-      }
-    }
-    
-    // 检查哈希前缀缓存
-    const hashPrefixesToCheck = [];
-    for (const prefix of expressionHashPrefixes) {
-      const cacheKey = `prefix_${prefix}`;
-      const cachedEntry = localCache.get(cacheKey);
-      
-      if (cachedEntry) {
-        if (cachedEntry.expiration && Date.now() > cachedEntry.expiration) {
-          localCache.delete(cacheKey);
-          hashPrefixesToCheck.push(prefix);
-        } else {
-          const matchingHash = expressionHashes.find(hash => getHashPrefix(hash) === prefix);
-          if (matchingHash && cachedEntry.status === SecurityStatus.Unsafe) {
-            console.log('使用缓存的哈希前缀检测结果:', cachedEntry.status);
-            return SecurityStatus.Unsafe;
-          }
-        }
-      } else {
-        hashPrefixesToCheck.push(prefix);
-      }
-    }
-    
     // 发送请求到 Google Safe Browsing API
-    if (hashPrefixesToCheck.length > 0) {
-      console.log('发送请求到 Google Safe Browsing API，哈希前缀:', hashPrefixesToCheck);
-      
-      const response = await fetchWithRetry(
-        `${API_CONFIG.GOOGLE_SAFE_BROWSING.endpoint}?key=${API_CONFIG.GOOGLE_SAFE_BROWSING.apiKey}&hashPrefixes=${hashPrefixesToCheck.join(',')}`,
-        {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/json'
-          }
+    console.log('发送请求到 Google Safe Browsing API，哈希前缀:', expressionHashPrefixes);
+    
+    const response = await fetchWithRetry(
+      `${API_CONFIG.GOOGLE_SAFE_BROWSING.endpoint}?key=${API_CONFIG.GOOGLE_SAFE_BROWSING.apiKey}&hashPrefixes=${expressionHashPrefixes.join(',')}`,
+      {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json'
         }
-      );
-
-      if (response.status !== 200) {
-        console.error('Google Safe Browsing API 返回错误状态:', response.status);
-        return SecurityStatus.Unknown;
       }
+    );
 
-      const responseData = await response.json() as SafeBrowsingResponse;
-      console.log('Google Safe Browsing API 响应:', responseData);
-      
-      // 处理响应
-      if (responseData.matches && responseData.matches.length > 0) {
-        for (const match of responseData.matches) {
-          const fullHash = await generateSHA256Hash(match.threat.url);
-          const cacheKey = `hash_${fullHash}`;
-          
-          // 更新缓存
-          localCache.set(cacheKey, {
-            status: SecurityStatus.Unsafe,
-            timestamp: Date.now(),
-            expiration: Date.now() + 30 * 60 * 1000 // 30分钟过期
-          });
-          
-          // 检查是否匹配任何表达式哈希
-          if (expressionHashes.includes(fullHash)) {
-            console.log('检测到不安全的域名:', domain);
-            return SecurityStatus.Unsafe;
-          }
+    if (response.status !== 200) {
+      console.error('Google Safe Browsing API 返回错误状态:', response.status);
+      return SecurityStatus.Unknown;
+    }
+
+    const responseData = await response.json() as SafeBrowsingResponse;
+    console.log('Google Safe Browsing API 响应:', responseData);
+    
+    // 处理响应
+    if (responseData.matches && responseData.matches.length > 0) {
+      for (const match of responseData.matches) {
+        const fullHash = await generateSHA256Hash(match.threat.url);
+        
+        // 检查是否匹配任何表达式哈希
+        if (expressionHashes.includes(fullHash)) {
+          console.log('检测到不安全的域名:', domain);
+          return SecurityStatus.Unsafe;
         }
       }
     }
@@ -303,24 +151,10 @@ async function checkWithGoogleSafeBrowsing(domain: string): Promise<SecurityStat
 export const checkDomainSecurity = async (domain: string): Promise<SecurityStatus> => {
   console.log(`正在检查域名安全状态: ${domain}`);
   
-  // 检查缓存
-  const cacheKey = `security_${domain}`;
-  if (isCacheValid(cacheKey)) {
-    console.log('使用缓存的安全状态');
-    return cache.get(cacheKey)!.status as SecurityStatus;
-  }
-  
   try {
     // 使用 Google Safe Browsing API 检查
     const status = await checkWithGoogleSafeBrowsing(domain);
     console.log(`域名 ${domain} 的安全状态:`, status);
-    
-    // 更新缓存
-    cache.set(cacheKey, {
-      status,
-      timestamp: Date.now()
-    });
-    
     return status;
   } catch (error) {
     console.error('检查域名安全状态时出错:', error);
@@ -333,13 +167,6 @@ export const checkDomainSecurity = async (domain: string): Promise<SecurityStatu
  */
 export const checkSpamhausStatus = async (domain: string): Promise<SpamhausStatus> => {
   console.log(`正在检查 Spamhaus 黑名单状态: ${domain}`);
-  
-  // 检查缓存
-  const cacheKey = `spamhaus_${domain}`;
-  if (isCacheValid(cacheKey)) {
-    console.log('使用缓存的黑名单状态');
-    return cache.get(cacheKey)!.status as SpamhausStatus;
-  }
   
   try {
     console.log('发送请求到 Spamhaus...');
@@ -359,12 +186,6 @@ export const checkSpamhausStatus = async (domain: string): Promise<SpamhausStatu
     
     const status = text.includes('未列入黑名单') ? SpamhausStatus.Safe : SpamhausStatus.Blacklisted;
     console.log(`域名 ${domain} 的 Spamhaus 状态:`, status);
-    
-    // 更新缓存
-    cache.set(cacheKey, {
-      status,
-      timestamp: Date.now()
-    });
     
     return status;
   } catch (error) {

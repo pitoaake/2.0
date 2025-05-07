@@ -2,25 +2,13 @@ import { useState, useCallback, useEffect } from 'react';
 import { Domain, SecurityStatus, SpamhausStatus, DomainHistoryEntry } from '../types/domain';
 import { checkDomainSecurity, checkSpamhausStatus } from '../services/securityCheckService';
 
-// Local storage key
-const STORAGE_KEY = 'domain-security-monitor-domains';
-
 // 自动检测间隔（15分钟）
 const AUTO_CHECK_INTERVAL = 15 * 60 * 1000;
 
 export const useDomainStore = () => {
-  const [domains, setDomains] = useState<Domain[]>(() => {
-    // Load from localStorage on initialization
-    const savedDomains = localStorage.getItem(STORAGE_KEY);
-    return savedDomains ? JSON.parse(savedDomains) : [];
-  });
+  const [domains, setDomains] = useState<Domain[]>([]);
   const [lastChecked, setLastChecked] = useState<number | null>(null);
   const [isChecking, setIsChecking] = useState(false);
-
-  // Save to localStorage whenever domains change
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(domains));
-  }, [domains]);
 
   // Add a new domain
   const addDomain = useCallback((domainName: string) => {
@@ -35,7 +23,7 @@ export const useDomainStore = () => {
       id: Date.now().toString(),
       name: normalizedDomain,
       securityStatus: SecurityStatus.Unknown,
-      spamhausStatus: SpamhausStatus.Safe,
+      spamhausStatus: SpamhausStatus.Unknown,
       lastChecked: null,
       isChecking: true,
       history: []
@@ -43,10 +31,8 @@ export const useDomainStore = () => {
     
     setDomains(prev => [...prev, newDomain]);
     
-    // Trigger a check for the new domain
-    setTimeout(() => {
-      checkDomain(newDomain.id);
-    }, 500);
+    // 立即检查新域名
+    checkDomain(newDomain.id);
   }, [domains]);
 
   // Remove a domain
