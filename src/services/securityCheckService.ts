@@ -1,72 +1,152 @@
 import { SecurityStatus, SpamhausStatus } from '../types/domain';
 
-// In a real application, these functions would make actual API calls
-// to Google's Transparency Report and Spamhaus
-// For this demo, we'll simulate responses
+// 缓存接口
+interface CacheEntry {
+  status: SecurityStatus | SpamhausStatus;
+  timestamp: number;
+}
 
-// Simulate network delay for API calls
-const simulateApiCall = async <T>(result: T): Promise<T> => {
-  const delay = Math.floor(Math.random() * 1000) + 500; // 500-1500ms delay
-  return new Promise(resolve => setTimeout(() => resolve(result), delay));
-};
+// 缓存存储
+const cache = new Map<string, CacheEntry>();
+
+// 缓存过期时间（15分钟）
+const CACHE_DURATION = 15 * 60 * 1000;
+
+// 请求延迟时间（1-3秒）
+const getRandomDelay = () => Math.floor(Math.random() * 2000) + 1000;
+
+// 重试配置
+const MAX_RETRIES = 3;
+const RETRY_DELAY = 2000;
 
 /**
- * Check domain security using Google Transparency Report data
- * This is a simulation - in a real app, you would query an actual API
+ * 带重试的请求函数
  */
-export const checkDomainSecurity = async (domain: string): Promise<SecurityStatus> => {
-  console.log(`Checking security for domain: ${domain}`);
-  
+async function fetchWithRetry(url: string, options: RequestInit, retries = MAX_RETRIES): Promise<Response> {
   try {
-    // Simulate API call - in reality, you would fetch data from 
-    // transparencyreport.google.com or use their API if available
+    // 添加随机延迟
+    await new Promise(resolve => setTimeout(resolve, getRandomDelay()));
     
-    // Generate a consistent but pseudo-random result based on domain name
-    // This is just for demo purposes
-    const hash = domain.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-    const remainder = hash % 4;
+    const response = await fetch(url, options);
+    if (response.ok) return response;
     
-    let status: SecurityStatus;
-    
-    switch (remainder) {
-      case 0:
-        status = SecurityStatus.Safe;
-        break;
-      case 1:
-        status = SecurityStatus.Unsafe;
-        break;
-      case 2:
-        status = SecurityStatus.PartiallySafe;
-        break;
-      default:
-        status = SecurityStatus.Safe; // Default to safe for demo
+    if (retries > 0) {
+      console.log(`请求失败，${retries}秒后重试...`);
+      await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
+      return fetchWithRetry(url, options, retries - 1);
     }
     
-    return await simulateApiCall(status);
+    throw new Error(`请求失败: ${response.status}`);
   } catch (error) {
-    console.error('Error checking domain security:', error);
+    if (retries > 0) {
+      console.log(`请求出错，${retries}秒后重试...`);
+      await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
+      return fetchWithRetry(url, options, retries - 1);
+    }
+    throw error;
+  }
+}
+
+/**
+ * 检查缓存是否有效
+ */
+function isCacheValid(key: string): boolean {
+  const entry = cache.get(key);
+  if (!entry) return false;
+  
+  const now = Date.now();
+  return now - entry.timestamp < CACHE_DURATION;
+}
+
+/**
+ * 检查域名在 Google 透明度报告中的安全状态
+ */
+export const checkDomainSecurity = async (domain: string): Promise<SecurityStatus> => {
+  console.log(`正在检查域名安全状态: ${domain}`);
+  
+  // 检查缓存
+  const cacheKey = `google_${domain}`;
+  if (isCacheValid(cacheKey)) {
+    console.log('使用缓存的安全状态');
+    return cache.get(cacheKey)!.status as SecurityStatus;
+  }
+  
+  try {
+    const response = await fetchWithRetry(
+      `https://transparencyreport.google.com/safe-browsing/search?url=${domain}`,
+      {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+          'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8'
+        }
+      }
+    );
+
+    const text = await response.text();
+    let status: SecurityStatus;
+    
+    // 检查页面内容来判断域名状态
+    if (text.includes('未发现安全问题')) {
+      status = SecurityStatus.Safe;
+    } else if (text.includes('发现安全问题')) {
+      status = SecurityStatus.Unsafe;
+    } else if (text.includes('部分安全问题')) {
+      status = SecurityStatus.PartiallySafe;
+    } else {
+      status = SecurityStatus.Unknown;
+    }
+    
+    // 更新缓存
+    cache.set(cacheKey, {
+      status,
+      timestamp: Date.now()
+    });
+    
+    return status;
+  } catch (error) {
+    console.error('检查域名安全状态时出错:', error);
     return SecurityStatus.Unknown;
   }
 };
 
 /**
- * Check if domain is in Spamhaus blacklist
- * This is a simulation - in a real app, you would query the actual Spamhaus API
+ * 检查域名是否在 Spamhaus 黑名单中
  */
 export const checkSpamhausStatus = async (domain: string): Promise<SpamhausStatus> => {
-  console.log(`Checking Spamhaus blacklist for domain: ${domain}`);
+  console.log(`正在检查 Spamhaus 黑名单状态: ${domain}`);
+  
+  // 检查缓存
+  const cacheKey = `spamhaus_${domain}`;
+  if (isCacheValid(cacheKey)) {
+    console.log('使用缓存的黑名单状态');
+    return cache.get(cacheKey)!.status as SpamhausStatus;
+  }
   
   try {
-    // Simulate API call - in reality, you would check against Spamhaus blacklists
+    const response = await fetchWithRetry(
+      `https://check.spamhaus.org/listed/?domain=${domain}`,
+      {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+          'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8'
+        }
+      }
+    );
+
+    const text = await response.text();
+    const status = text.includes('未列入黑名单') ? SpamhausStatus.Safe : SpamhausStatus.Blacklisted;
     
-    // Generate a consistent but pseudo-random result based on domain name
-    // This is just for demo purposes
-    const hash = domain.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-    const isBlacklisted = hash % 10 === 0; // 10% chance of being blacklisted
+    // 更新缓存
+    cache.set(cacheKey, {
+      status,
+      timestamp: Date.now()
+    });
     
-    return await simulateApiCall(isBlacklisted ? SpamhausStatus.Blacklisted : SpamhausStatus.Safe);
+    return status;
   } catch (error) {
-    console.error('Error checking Spamhaus status:', error);
-    return SpamhausStatus.Safe; // Default to safe on error
+    console.error('检查 Spamhaus 状态时出错:', error);
+    return SpamhausStatus.Safe;
   }
 };

@@ -5,6 +5,9 @@ import { checkDomainSecurity, checkSpamhausStatus } from '../services/securityCh
 // Local storage key
 const STORAGE_KEY = 'domain-security-monitor-domains';
 
+// 自动检测间隔（15分钟）
+const AUTO_CHECK_INTERVAL = 15 * 60 * 1000;
+
 export const useDomainStore = () => {
   const [domains, setDomains] = useState<Domain[]>(() => {
     // Load from localStorage on initialization
@@ -12,6 +15,7 @@ export const useDomainStore = () => {
     return savedDomains ? JSON.parse(savedDomains) : [];
   });
   const [lastChecked, setLastChecked] = useState<number | null>(null);
+  const [isChecking, setIsChecking] = useState(false);
 
   // Save to localStorage whenever domains change
   useEffect(() => {
@@ -101,13 +105,15 @@ export const useDomainStore = () => {
     if (!domainToCheck) return;
     
     try {
-      // In a real application, these would be actual API calls
-      const securityStatus = await checkDomainSecurity(domainToCheck.name);
-      const spamhausStatus = await checkSpamhausStatus(domainToCheck.name);
+      // 并行检查两个状态
+      const [securityStatus, spamhausStatus] = await Promise.all([
+        checkDomainSecurity(domainToCheck.name),
+        checkSpamhausStatus(domainToCheck.name)
+      ]);
       
       updateDomainStatus(domainId, securityStatus, spamhausStatus);
     } catch (error) {
-      console.error('Error checking domain:', error);
+      console.error('检查域名时出错:', error);
       
       // Set to unknown on error
       updateDomainStatus(domainId, SecurityStatus.Unknown, SpamhausStatus.Safe);
@@ -115,11 +121,33 @@ export const useDomainStore = () => {
   }, [domains, updateDomainStatus]);
 
   // Check all domains
-  const checkAllDomains = useCallback(() => {
-    domains.forEach(domain => {
-      checkDomain(domain.id);
-    });
-  }, [domains, checkDomain]);
+  const checkAllDomains = useCallback(async () => {
+    if (isChecking) return;
+    
+    setIsChecking(true);
+    try {
+      // 串行检查所有域名，避免并发请求过多
+      for (const domain of domains) {
+        await checkDomain(domain.id);
+      }
+    } catch (error) {
+      console.error('批量检查域名时出错:', error);
+    } finally {
+      setIsChecking(false);
+    }
+  }, [domains, checkDomain, isChecking]);
+
+  // 自动检查
+  useEffect(() => {
+    // 立即执行一次检查
+    checkAllDomains();
+    
+    // 设置定时器
+    const interval = setInterval(checkAllDomains, AUTO_CHECK_INTERVAL);
+    
+    // 清理定时器
+    return () => clearInterval(interval);
+  }, [checkAllDomains]);
 
   return {
     domains,
@@ -127,6 +155,7 @@ export const useDomainStore = () => {
     removeDomain,
     checkDomain,
     checkAllDomains,
-    lastChecked
+    lastChecked,
+    isChecking
   };
 };
