@@ -1,13 +1,14 @@
 export enum SecurityStatus {
-  Safe = 'SAFE',
-  Unsafe = 'UNSAFE',
-  PartiallySafe = 'PARTIALLY_SAFE',
-  Unknown = 'UNKNOWN'
+  Safe = 'safe',
+  Unsafe = 'unsafe',
+  PartiallySafe = 'partially_safe',
+  Unknown = 'unknown'
 }
 
 export enum SpamhausStatus {
-  Safe = 'SAFE',
-  Blacklisted = 'BLACKLISTED'
+  Safe = 'safe',
+  Blacklisted = 'blacklisted',
+  Unknown = 'unknown'
 }
 
 export interface Domain {

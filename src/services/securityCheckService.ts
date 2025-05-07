@@ -217,6 +217,7 @@ async function checkWithGoogleSafeBrowsing(domain: string): Promise<SecurityStat
         if (cachedEntry.expiration && Date.now() > cachedEntry.expiration) {
           localCache.delete(cacheKey);
         } else {
+          console.log('使用缓存的检测结果:', cachedEntry.status);
           return cachedEntry.status as SecurityStatus;
         }
       }
@@ -235,6 +236,7 @@ async function checkWithGoogleSafeBrowsing(domain: string): Promise<SecurityStat
         } else {
           const matchingHash = expressionHashes.find(hash => getHashPrefix(hash) === prefix);
           if (matchingHash && cachedEntry.status === SecurityStatus.Unsafe) {
+            console.log('使用缓存的哈希前缀检测结果:', cachedEntry.status);
             return SecurityStatus.Unsafe;
           }
         }
@@ -245,6 +247,8 @@ async function checkWithGoogleSafeBrowsing(domain: string): Promise<SecurityStat
     
     // 发送请求到 Google Safe Browsing API
     if (hashPrefixesToCheck.length > 0) {
+      console.log('发送请求到 Google Safe Browsing API，哈希前缀:', hashPrefixesToCheck);
+      
       const response = await fetchWithRetry(
         `${API_CONFIG.GOOGLE_SAFE_BROWSING.endpoint}?key=${API_CONFIG.GOOGLE_SAFE_BROWSING.apiKey}&hashPrefixes=${hashPrefixesToCheck.join(',')}`,
         {
@@ -261,9 +265,10 @@ async function checkWithGoogleSafeBrowsing(domain: string): Promise<SecurityStat
       }
 
       const responseData = await response.json() as SafeBrowsingResponse;
+      console.log('Google Safe Browsing API 响应:', responseData);
       
       // 处理响应
-      if (responseData.matches) {
+      if (responseData.matches && responseData.matches.length > 0) {
         for (const match of responseData.matches) {
           const fullHash = await generateSHA256Hash(match.threat.url);
           const cacheKey = `hash_${fullHash}`;
@@ -277,12 +282,14 @@ async function checkWithGoogleSafeBrowsing(domain: string): Promise<SecurityStat
           
           // 检查是否匹配任何表达式哈希
           if (expressionHashes.includes(fullHash)) {
+            console.log('检测到不安全的域名:', domain);
             return SecurityStatus.Unsafe;
           }
         }
       }
     }
     
+    console.log('域名安全:', domain);
     return SecurityStatus.Safe;
   } catch (error) {
     console.error('Google Safe Browsing 检查失败:', error);
@@ -306,6 +313,7 @@ export const checkDomainSecurity = async (domain: string): Promise<SecurityStatu
   try {
     // 使用 Google Safe Browsing API 检查
     const status = await checkWithGoogleSafeBrowsing(domain);
+    console.log(`域名 ${domain} 的安全状态:`, status);
     
     // 更新缓存
     cache.set(cacheKey, {
@@ -334,6 +342,7 @@ export const checkSpamhausStatus = async (domain: string): Promise<SpamhausStatu
   }
   
   try {
+    console.log('发送请求到 Spamhaus...');
     const response = await fetchWithRetry(
       `https://check.spamhaus.org/listed/?domain=${domain}`,
       {
@@ -346,7 +355,10 @@ export const checkSpamhausStatus = async (domain: string): Promise<SpamhausStatu
     );
 
     const text = await response.text();
+    console.log('Spamhaus 响应:', text);
+    
     const status = text.includes('未列入黑名单') ? SpamhausStatus.Safe : SpamhausStatus.Blacklisted;
+    console.log(`域名 ${domain} 的 Spamhaus 状态:`, status);
     
     // 更新缓存
     cache.set(cacheKey, {
@@ -357,6 +369,6 @@ export const checkSpamhausStatus = async (domain: string): Promise<SpamhausStatu
     return status;
   } catch (error) {
     console.error('检查 Spamhaus 状态时出错:', error);
-    return SpamhausStatus.Safe;
+    return SpamhausStatus.Unknown;
   }
 };
