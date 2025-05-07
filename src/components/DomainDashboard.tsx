@@ -6,9 +6,24 @@ import { useToast } from './ui/Toast';
 export const DomainDashboard: React.FC = () => {
   const [domainName, setDomainName] = useState('');
   const [isValid, setIsValid] = useState(true);
+  const [logs, setLogs] = useState<string[]>([]);
   const { domains, checkAllDomains, lastChecked, addDomain } = useDomainStore();
   const { showToast } = useToast();
   
+  // 添加日志函数
+  const addLog = (message: string) => {
+    const timestamp = new Date().toLocaleTimeString();
+    setLogs(prev => [`[${timestamp}] ${message}`, ...prev].slice(0, 100)); // 只保留最近100条日志
+  };
+
+  // 监听域名变化
+  useEffect(() => {
+    addLog(`当前监控域名数量: ${domains.length}`);
+    if (domains.length > 0) {
+      addLog(`监控域名列表: ${domains.map(d => d.name).join(', ')}`);
+    }
+  }, [domains]);
+
   const validateDomain = (domain: string): boolean => {
     const pattern = /^([a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/;
     return pattern.test(domain);
@@ -19,9 +34,11 @@ export const DomainDashboard: React.FC = () => {
     
     if (!domainName.trim() || !validateDomain(domainName)) {
       setIsValid(false);
+      addLog(`域名验证失败: ${domainName}`);
       return;
     }
     
+    addLog(`正在添加域名: ${domainName}`);
     addDomain(domainName.trim());
     showToast({
       title: '添加成功',
@@ -34,9 +51,11 @@ export const DomainDashboard: React.FC = () => {
 
   // 每15分钟检查一次
   useEffect(() => {
+    addLog('开始执行域名安全检查');
     checkAllDomains();
     
     const interval = setInterval(() => {
+      addLog('执行定期域名安全检查');
       checkAllDomains();
       showToast({
         title: '安全检查',
@@ -96,6 +115,24 @@ export const DomainDashboard: React.FC = () => {
       </header>
       
       <DomainList />
+
+      {/* 运行日志区域 */}
+      <div className="mt-8">
+        <h2 className="text-xl font-semibold mb-4">运行日志</h2>
+        <div className="bg-gray-100 dark:bg-gray-800 rounded-lg p-4 h-64 overflow-y-auto">
+          {logs.length > 0 ? (
+            <div className="font-mono text-sm">
+              {logs.map((log, index) => (
+                <div key={index} className="mb-1">
+                  {log}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-gray-500 dark:text-gray-400">暂无日志</p>
+          )}
+        </div>
+      </div>
     </div>
   );
 };
