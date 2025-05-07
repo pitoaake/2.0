@@ -37,9 +37,19 @@ const SECURITY_CHECK_SOURCES = {
 const API_CONFIG = {
   GOOGLE_SAFE_BROWSING: {
     apiKey: 'AIzaSyAwcApluz37f7q9F5yavmn3e1jcrF9eg2A',
-    endpoint: 'https://safebrowsing.googleapis.com/v4/threatMatches:find'
+    endpoint: 'https://safebrowsing.googleapis.com/v5/hashes:search'
   }
 };
+
+interface SafeBrowsingResponse {
+  matches?: Array<{
+    threatType: string;
+    threat: {
+      url: string;
+    };
+    cacheDuration: string;
+  }>;
+}
 
 /**
  * 带重试的请求函数
@@ -149,78 +159,46 @@ async function checkWithURLScan(domain: string): Promise<SecurityStatus> {
  */
 async function checkWithGoogleSafeBrowsing(domain: string): Promise<SecurityStatus> {
   try {
+    // 生成域名的 SHA256 哈希
+    const encoder = new TextEncoder();
+    const domainData = encoder.encode(domain);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', domainData);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    const hashPrefix = hashArray.slice(0, 4).map(b => b.toString(16).padStart(2, '0')).join('');
+
+    // 发送请求到 Google Safe Browsing API
     const response = await fetchWithRetry(
-      `${API_CONFIG.GOOGLE_SAFE_BROWSING.endpoint}?key=${API_CONFIG.GOOGLE_SAFE_BROWSING.apiKey}`,
+      `${API_CONFIG.GOOGLE_SAFE_BROWSING.endpoint}?key=${API_CONFIG.GOOGLE_SAFE_BROWSING.apiKey}&hashPrefixes=${hashPrefix}`,
       {
-        method: 'POST',
+        method: 'GET',
         headers: {
           'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          client: {
-            clientId: 'domain-security-checker',
-            clientVersion: '1.0.0'
-          },
-          threatInfo: {
-            threatTypes: [
-              'MALWARE',
-              'SOCIAL_ENGINEERING',
-              'UNWANTED_SOFTWARE',
-              'POTENTIALLY_HARMFUL_APPLICATION',
-              'THREAT_TYPE_UNSPECIFIED'
-            ],
-            platformTypes: ['ANY_PLATFORM'],
-            threatEntryTypes: ['URL'],
-            threatEntries: [
-              { url: `http://${domain}` },
-              { url: `https://${domain}` },
-              { url: `http://www.${domain}` },
-              { url: `https://www.${domain}` }
-            ]
-          }
-        })
+        }
       }
     );
 
-    const data = await response.json();
-    
     // 检查响应状态
     if (response.status !== 200) {
       console.error('Google Safe Browsing API 返回错误状态:', response.status);
       return SecurityStatus.Unknown;
     }
 
-    // 检查是否有匹配的威胁
-    if (data.matches) {
-      // 分析威胁类型
-      const threats = data.matches.map((match: any) => match.threatType);
-      console.log('检测到的威胁类型:', threats);
-
-      // 根据威胁类型判断安全状态
-      if (threats.includes('MALWARE') || threats.includes('SOCIAL_ENGINEERING')) {
-        return SecurityStatus.Unsafe;
-      } else if (threats.includes('UNWANTED_SOFTWARE') || threats.includes('POTENTIALLY_HARMFUL_APPLICATION')) {
-        return SecurityStatus.PartiallySafe;
-      }
+    const responseData = await response.json() as SafeBrowsingResponse;
+    
+    // 如果没有匹配项，说明域名安全
+    if (!responseData.matches || responseData.matches.length === 0) {
+      return SecurityStatus.Safe;
     }
 
-    // 如果没有匹配的威胁，检查域名是否可访问
-    try {
-      const availabilityCheck = await fetchWithRetry(
-        `https://${domain}`,
-        {
-          method: 'HEAD',
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-          }
-        }
-      );
-      
-      if (availabilityCheck.ok) {
-        return SecurityStatus.Safe;
-      }
-    } catch (error) {
-      console.log('域名可访问性检查失败:', error);
+    // 分析威胁类型
+    const threats = responseData.matches.map(match => match.threatType);
+    console.log('检测到的威胁类型:', threats);
+
+    // 根据威胁类型判断安全状态
+    if (threats.includes('MALWARE') || threats.includes('SOCIAL_ENGINEERING')) {
+      return SecurityStatus.Unsafe;
+    } else if (threats.includes('UNWANTED_SOFTWARE') || threats.includes('POTENTIALLY_HARMFUL_APPLICATION')) {
+      return SecurityStatus.PartiallySafe;
     }
 
     return SecurityStatus.Unknown;
