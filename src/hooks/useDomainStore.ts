@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { Domain, SecurityStatus, SpamhausStatus, DomainHistoryEntry } from '../types/domain';
 import { checkDomainSecurity, checkSpamhausStatus } from '../services/securityCheckService';
 
@@ -9,6 +9,10 @@ const AUTO_CHECK_INTERVAL = 15 * 60 * 1000;
 const STORAGE_KEY = 'domain-monitor-list';
 
 export const useDomainStore = () => {
+  // 使用 useRef 来保存定时器引用
+  const checkIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const isInitialCheckRef = useRef(false);
+
   // 从本地存储加载域名列表
   const [domains, setDomains] = useState<Domain[]>(() => {
     if (typeof window !== 'undefined') {
@@ -29,6 +33,14 @@ export const useDomainStore = () => {
     }
   }, [domains]);
 
+  // 清理定时器
+  const clearCheckInterval = useCallback(() => {
+    if (checkIntervalRef.current) {
+      clearInterval(checkIntervalRef.current);
+      checkIntervalRef.current = null;
+    }
+  }, []);
+
   // Add a new domain
   const addDomain = useCallback(async (domainName: string) => {
     const normalizedDomain = domainName.toLowerCase().trim();
@@ -39,7 +51,7 @@ export const useDomainStore = () => {
       return;
     }
     
-    setCheckStatus(`开始添加域名: ${normalizedDomain}`);
+    setCheckStatus(`正在添加域名: ${normalizedDomain}`);
     
     const newDomain: Domain = {
       id: Date.now().toString(),
@@ -270,20 +282,29 @@ export const useDomainStore = () => {
 
   // 自动检查
   useEffect(() => {
-    if (domains.length > 0) {
-      setCheckStatus('初始化检查所有域名');
+    // 只在组件挂载时执行一次初始检查
+    if (!isInitialCheckRef.current && domains.length > 0) {
+      isInitialCheckRef.current = true;
+      setCheckStatus('执行初始域名安全检查');
       checkAllDomains();
     }
     
-    const interval = setInterval(() => {
-      if (domains.length > 0) {
+    // 清理之前的定时器
+    clearCheckInterval();
+    
+    // 设置新的定时器
+    if (domains.length > 0) {
+      checkIntervalRef.current = setInterval(() => {
         setCheckStatus('执行定期域名安全检查');
         checkAllDomains();
-      }
-    }, AUTO_CHECK_INTERVAL);
+      }, AUTO_CHECK_INTERVAL);
+    }
     
-    return () => clearInterval(interval);
-  }, [checkAllDomains, domains.length]);
+    // 组件卸载时清理定时器
+    return () => {
+      clearCheckInterval();
+    };
+  }, [checkAllDomains, domains.length, clearCheckInterval]);
 
   return {
     domains,
