@@ -141,13 +141,17 @@ async function checkWithGoogleSafeBrowsing(domain: string): Promise<SecurityStat
         const threatTypes = responseData.matches.map(match => match.threatType);
         console.log('检测到的威胁类型:', threatTypes);
         
-        // 如果所有URL都有威胁，则标记为不安全
+        // 检查每个 URL 的威胁情况
+        const unsafeUrls = responseData.matches.map(match => match.threat.url);
+        console.log('检测到威胁的 URL:', unsafeUrls);
+        
+        // 如果所有 URL 都有威胁，则标记为不安全
         if (responseData.matches.length === urls.length) {
           console.log('所有URL都检测到威胁，标记为不安全');
           return SecurityStatus.Unsafe;
         }
         
-        // 如果部分URL有威胁，则标记为部分不安全
+        // 如果部分 URL 有威胁，则标记为部分不安全
         console.log('部分URL检测到威胁，标记为部分不安全');
         return SecurityStatus.PartiallySafe;
       }
