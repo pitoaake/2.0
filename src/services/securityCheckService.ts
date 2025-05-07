@@ -137,18 +137,31 @@ async function checkWithGoogleSafeBrowsing(domain: string): Promise<SecurityStat
       console.log('Google Safe Browsing API 响应:', responseData);
       
       if (responseData.matches && responseData.matches.length > 0) {
-        console.log('检测到不安全的域名:', domain);
-        return SecurityStatus.Unsafe;
+        // 检查威胁类型
+        const threatTypes = responseData.matches.map(match => match.threatType);
+        console.log('检测到的威胁类型:', threatTypes);
+        
+        // 如果所有URL都有威胁，则标记为不安全
+        if (responseData.matches.length === urls.length) {
+          console.log('所有URL都检测到威胁，标记为不安全');
+          return SecurityStatus.Unsafe;
+        }
+        
+        // 如果部分URL有威胁，则标记为部分不安全
+        console.log('部分URL检测到威胁，标记为部分不安全');
+        return SecurityStatus.PartiallySafe;
       }
     } else if (response.status === 204) {
       // 204 表示没有匹配的威胁
-      console.log('域名安全:', domain);
+      console.log('域名安全: 未检测到任何威胁');
       return SecurityStatus.Safe;
     } else {
       console.error('Google Safe Browsing API 返回错误状态:', response.status);
       return SecurityStatus.Unknown;
     }
     
+    // 如果没有匹配的威胁，返回安全状态
+    console.log('域名安全: 未检测到任何威胁');
     return SecurityStatus.Safe;
   } catch (error) {
     console.error('Google Safe Browsing 检查失败:', error);
