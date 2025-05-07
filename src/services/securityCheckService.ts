@@ -4,6 +4,7 @@ import { SecurityStatus, SpamhausStatus } from '../types/domain';
 interface CacheEntry {
   status: SecurityStatus | SpamhausStatus;
   timestamp: number;
+  expiration?: number;
 }
 
 // 缓存存储
@@ -49,6 +50,42 @@ interface SafeBrowsingResponse {
     };
     cacheDuration: string;
   }>;
+}
+
+// 本地缓存
+const localCache = new Map<string, CacheEntry>();
+
+// 生成 URL 表达式列表
+function generateUrlExpressions(url: string): string[] {
+  const expressions: string[] = [];
+  const urlObj = new URL(url);
+  
+  // 添加主机名
+  expressions.push(urlObj.hostname);
+  
+  // 添加路径前缀
+  const pathParts = urlObj.pathname.split('/').filter(Boolean);
+  let currentPath = '';
+  for (const part of pathParts) {
+    currentPath += '/' + part;
+    expressions.push(urlObj.hostname + currentPath);
+  }
+  
+  return expressions;
+}
+
+// 生成 SHA256 哈希
+async function generateSHA256Hash(input: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(input);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// 获取哈希前缀（前4个字节）
+function getHashPrefix(hash: string): string {
+  return hash.slice(0, 8);
 }
 
 /**
@@ -159,49 +196,94 @@ async function checkWithURLScan(domain: string): Promise<SecurityStatus> {
  */
 async function checkWithGoogleSafeBrowsing(domain: string): Promise<SecurityStatus> {
   try {
-    // 生成域名的 SHA256 哈希
-    const encoder = new TextEncoder();
-    const domainData = encoder.encode(domain);
-    const hashBuffer = await crypto.subtle.digest('SHA-256', domainData);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    const hashPrefix = hashArray.slice(0, 4).map(b => b.toString(16).padStart(2, '0')).join('');
-
-    // 发送请求到 Google Safe Browsing API
-    const response = await fetchWithRetry(
-      `${API_CONFIG.GOOGLE_SAFE_BROWSING.endpoint}?key=${API_CONFIG.GOOGLE_SAFE_BROWSING.apiKey}&hashPrefixes=${hashPrefix}`,
-      {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json'
+    // 生成 URL 表达式列表
+    const urls = [
+      `http://${domain}`,
+      `https://${domain}`,
+      `http://www.${domain}`,
+      `https://www.${domain}`
+    ];
+    
+    const expressions = urls.flatMap(url => generateUrlExpressions(url));
+    const expressionHashes = await Promise.all(expressions.map(expr => generateSHA256Hash(expr)));
+    const expressionHashPrefixes = expressionHashes.map(hash => getHashPrefix(hash));
+    
+    // 检查本地缓存
+    for (const hash of expressionHashes) {
+      const cacheKey = `hash_${hash}`;
+      const cachedEntry = localCache.get(cacheKey);
+      
+      if (cachedEntry) {
+        if (cachedEntry.expiration && Date.now() > cachedEntry.expiration) {
+          localCache.delete(cacheKey);
+        } else {
+          return cachedEntry.status as SecurityStatus;
         }
       }
-    );
-
-    // 检查响应状态
-    if (response.status !== 200) {
-      console.error('Google Safe Browsing API 返回错误状态:', response.status);
-      return SecurityStatus.Unknown;
     }
-
-    const responseData = await response.json() as SafeBrowsingResponse;
     
-    // 如果没有匹配项，说明域名安全
-    if (!responseData.matches || responseData.matches.length === 0) {
-      return SecurityStatus.Safe;
+    // 检查哈希前缀缓存
+    const hashPrefixesToCheck = [];
+    for (const prefix of expressionHashPrefixes) {
+      const cacheKey = `prefix_${prefix}`;
+      const cachedEntry = localCache.get(cacheKey);
+      
+      if (cachedEntry) {
+        if (cachedEntry.expiration && Date.now() > cachedEntry.expiration) {
+          localCache.delete(cacheKey);
+          hashPrefixesToCheck.push(prefix);
+        } else {
+          const matchingHash = expressionHashes.find(hash => getHashPrefix(hash) === prefix);
+          if (matchingHash && cachedEntry.status === SecurityStatus.Unsafe) {
+            return SecurityStatus.Unsafe;
+          }
+        }
+      } else {
+        hashPrefixesToCheck.push(prefix);
+      }
     }
+    
+    // 发送请求到 Google Safe Browsing API
+    if (hashPrefixesToCheck.length > 0) {
+      const response = await fetchWithRetry(
+        `${API_CONFIG.GOOGLE_SAFE_BROWSING.endpoint}?key=${API_CONFIG.GOOGLE_SAFE_BROWSING.apiKey}&hashPrefixes=${hashPrefixesToCheck.join(',')}`,
+        {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        }
+      );
 
-    // 分析威胁类型
-    const threats = responseData.matches.map(match => match.threatType);
-    console.log('检测到的威胁类型:', threats);
+      if (response.status !== 200) {
+        console.error('Google Safe Browsing API 返回错误状态:', response.status);
+        return SecurityStatus.Unknown;
+      }
 
-    // 根据威胁类型判断安全状态
-    if (threats.includes('MALWARE') || threats.includes('SOCIAL_ENGINEERING')) {
-      return SecurityStatus.Unsafe;
-    } else if (threats.includes('UNWANTED_SOFTWARE') || threats.includes('POTENTIALLY_HARMFUL_APPLICATION')) {
-      return SecurityStatus.PartiallySafe;
+      const responseData = await response.json() as SafeBrowsingResponse;
+      
+      // 处理响应
+      if (responseData.matches) {
+        for (const match of responseData.matches) {
+          const fullHash = await generateSHA256Hash(match.threat.url);
+          const cacheKey = `hash_${fullHash}`;
+          
+          // 更新缓存
+          localCache.set(cacheKey, {
+            status: SecurityStatus.Unsafe,
+            timestamp: Date.now(),
+            expiration: Date.now() + 30 * 60 * 1000 // 30分钟过期
+          });
+          
+          // 检查是否匹配任何表达式哈希
+          if (expressionHashes.includes(fullHash)) {
+            return SecurityStatus.Unsafe;
+          }
+        }
+      }
     }
-
-    return SecurityStatus.Unknown;
+    
+    return SecurityStatus.Safe;
   } catch (error) {
     console.error('Google Safe Browsing 检查失败:', error);
     return SecurityStatus.Unknown;
