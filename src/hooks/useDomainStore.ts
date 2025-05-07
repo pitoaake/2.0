@@ -7,32 +7,41 @@ const AUTO_CHECK_INTERVAL = 15 * 60 * 1000;
 
 // 本地存储键
 const STORAGE_KEY = 'domain-monitor-list';
+const LAST_CHECK_TIME_KEY = 'domain-last-check-time';
 
 export const useDomainStore = () => {
   // 使用 useRef 来保存定时器引用和检查状态
   const checkIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const isInitialCheckRef = useRef(false);
   const isCheckingRef = useRef(false);
+  const lastCheckTimeRef = useRef<number | null>(null);
 
-  // 从本地存储加载域名列表
+  // 从本地存储加载域名列表和上次检查时间
   const [domains, setDomains] = useState<Domain[]>(() => {
     if (typeof window !== 'undefined') {
       const savedDomains = localStorage.getItem(STORAGE_KEY);
+      const savedLastCheckTime = localStorage.getItem(LAST_CHECK_TIME_KEY);
+      if (savedLastCheckTime) {
+        lastCheckTimeRef.current = parseInt(savedLastCheckTime);
+      }
       return savedDomains ? JSON.parse(savedDomains) : [];
     }
     return [];
   });
   
-  const [lastChecked, setLastChecked] = useState<number | null>(null);
+  const [lastChecked, setLastChecked] = useState<number | null>(lastCheckTimeRef.current);
   const [isChecking, setIsChecking] = useState(false);
   const [checkStatus, setCheckStatus] = useState<string>('');
 
-  // 保存域名列表到本地存储
+  // 保存域名列表和上次检查时间到本地存储
   useEffect(() => {
     if (typeof window !== 'undefined') {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(domains));
+      if (lastChecked) {
+        localStorage.setItem(LAST_CHECK_TIME_KEY, lastChecked.toString());
+      }
     }
-  }, [domains]);
+  }, [domains, lastChecked]);
 
   // 清理定时器
   const clearCheckInterval = useCallback(() => {
@@ -41,6 +50,79 @@ export const useDomainStore = () => {
       checkIntervalRef.current = null;
     }
   }, []);
+
+  // 检查是否需要执行检测
+  const shouldCheck = useCallback(() => {
+    if (!lastCheckTimeRef.current) return true;
+    const now = Date.now();
+    return now - lastCheckTimeRef.current >= AUTO_CHECK_INTERVAL;
+  }, []);
+
+  // 批量检查域名
+  const batchCheckDomains = useCallback(async (domainList: Domain[]) => {
+    if (isCheckingRef.current) {
+      console.log('已有检查正在进行中，跳过本次检查');
+      return;
+    }
+
+    if (domainList.length === 0) {
+      console.log('没有需要检查的域名');
+      return;
+    }
+
+    try {
+      isCheckingRef.current = true;
+      setIsChecking(true);
+      setCheckStatus(`开始批量检查 ${domainList.length} 个域名`);
+
+      // 串行检查所有域名
+      for (const domain of domainList) {
+        setCheckStatus(`正在检查域名: ${domain.name}`);
+        await checkDomain(domain.id);
+      }
+
+      setCheckStatus('批量检查完成');
+      const now = Date.now();
+      setLastChecked(now);
+      lastCheckTimeRef.current = now;
+    } catch (error) {
+      console.error('批量检查域名时出错:', error);
+      setCheckStatus(`批量检查域名时出错: ${error instanceof Error ? error.message : '未知错误'}`);
+    } finally {
+      isCheckingRef.current = false;
+      setIsChecking(false);
+    }
+  }, [checkDomain]);
+
+  // 自动检查
+  useEffect(() => {
+    // 只在组件挂载时执行一次初始检查
+    if (!isInitialCheckRef.current && domains.length > 0) {
+      isInitialCheckRef.current = true;
+      setCheckStatus('执行初始域名安全检查');
+      batchCheckDomains(domains);
+    }
+
+    // 清理之前的定时器
+    clearCheckInterval();
+
+    // 设置新的定时器
+    if (domains.length > 0) {
+      checkIntervalRef.current = setInterval(() => {
+        if (shouldCheck()) {
+          setCheckStatus('执行定期域名安全检查');
+          batchCheckDomains(domains);
+        } else {
+          console.log('距离上次检查未超过15分钟，跳过本次检查');
+        }
+      }, AUTO_CHECK_INTERVAL);
+    }
+
+    // 组件卸载时清理定时器
+    return () => {
+      clearCheckInterval();
+    };
+  }, [domains, batchCheckDomains, clearCheckInterval, shouldCheck]);
 
   // Add a new domain
   const addDomain = useCallback(async (domainName: string) => {
@@ -251,68 +333,12 @@ export const useDomainStore = () => {
     }
   }, [domains, updateDomainStatus]);
 
-  // Check all domains
-  const checkAllDomains = useCallback(async () => {
-    if (isChecking) {
-      setCheckStatus('已有检查正在进行中，跳过本次检查');
-      return;
-    }
-    
-    if (domains.length === 0) {
-      setCheckStatus('没有需要检查的域名');
-      return;
-    }
-    
-    setCheckStatus(`开始检查所有域名，共 ${domains.length} 个`);
-    setIsChecking(true);
-    
-    try {
-      // 串行检查所有域名，避免并发请求过多
-      for (const domain of domains) {
-        setCheckStatus(`正在检查域名: ${domain.name}`);
-        await checkDomain(domain.id);
-      }
-      setCheckStatus('所有域名检查完成');
-    } catch (error) {
-      console.error('批量检查域名时出错:', error);
-      setCheckStatus(`批量检查域名时出错: ${error.message}`);
-    } finally {
-      setIsChecking(false);
-    }
-  }, [domains, checkDomain, isChecking]);
-
-  // 自动检查
-  useEffect(() => {
-    // 只在组件挂载时执行一次初始检查
-    if (!isInitialCheckRef.current && domains.length > 0) {
-      isInitialCheckRef.current = true;
-      setCheckStatus('执行初始域名安全检查');
-      checkAllDomains();
-    }
-    
-    // 清理之前的定时器
-    clearCheckInterval();
-    
-    // 设置新的定时器
-    if (domains.length > 0) {
-      checkIntervalRef.current = setInterval(() => {
-        setCheckStatus('执行定期域名安全检查');
-        checkAllDomains();
-      }, AUTO_CHECK_INTERVAL);
-    }
-    
-    // 组件卸载时清理定时器
-    return () => {
-      clearCheckInterval();
-    };
-  }, [checkAllDomains, domains.length, clearCheckInterval]);
-
   return {
     domains,
     addDomain,
     removeDomain,
     checkDomain,
-    checkAllDomains,
+    batchCheckDomains,
     lastChecked,
     isChecking,
     checkStatus
