@@ -11,13 +11,14 @@ const RETRY_DELAY = 2000;
 const API_CONFIG = {
   GOOGLE_SAFE_BROWSING: {
     apiKey: 'AIzaSyAwcApluz37f7q9F5yavmn3e1jcrF9eg2A',
-    endpoint: 'https://safebrowsing.googleapis.com/v5/hashes:search'
+    endpoint: 'https://safebrowsing.googleapis.com/v4/threatMatches:find'
   }
 };
 
 interface SafeBrowsingResponse {
   matches?: Array<{
     threatType: string;
+    platformType: string;
     threat: {
       url: string;
     };
@@ -91,7 +92,7 @@ async function fetchWithRetry(url: string, options: RequestInit, retries = MAX_R
  */
 async function checkWithGoogleSafeBrowsing(domain: string): Promise<SecurityStatus> {
   try {
-    // 生成 URL 表达式列表
+    // 准备要检查的 URL 列表
     const urls = [
       `http://${domain}`,
       `https://${domain}`,
@@ -99,45 +100,55 @@ async function checkWithGoogleSafeBrowsing(domain: string): Promise<SecurityStat
       `https://www.${domain}`
     ];
     
-    const expressions = urls.flatMap(url => generateUrlExpressions(url));
-    const expressionHashes = await Promise.all(expressions.map(expr => generateSHA256Hash(expr)));
-    const expressionHashPrefixes = expressionHashes.map(hash => getHashPrefix(hash));
+    // 准备请求体
+    const requestBody = {
+      client: {
+        clientId: "domain-security-checker",
+        clientVersion: "1.0.0"
+      },
+      threatInfo: {
+        threatTypes: [
+          "MALWARE",
+          "SOCIAL_ENGINEERING",
+          "UNWANTED_SOFTWARE",
+          "POTENTIALLY_HARMFUL_APPLICATION"
+        ],
+        platformTypes: ["ANY_PLATFORM"],
+        threatEntryTypes: ["URL"],
+        threatEntries: urls.map(url => ({ url }))
+      }
+    };
     
-    // 发送请求到 Google Safe Browsing API
-    console.log('发送请求到 Google Safe Browsing API，哈希前缀:', expressionHashPrefixes);
+    console.log('发送请求到 Google Safe Browsing API:', requestBody);
     
     const response = await fetchWithRetry(
-      `${API_CONFIG.GOOGLE_SAFE_BROWSING.endpoint}?key=${API_CONFIG.GOOGLE_SAFE_BROWSING.apiKey}&hashPrefixes=${expressionHashPrefixes.join(',')}`,
+      `${API_CONFIG.GOOGLE_SAFE_BROWSING.endpoint}?key=${API_CONFIG.GOOGLE_SAFE_BROWSING.apiKey}`,
       {
-        method: 'GET',
+        method: 'POST',
         headers: {
           'Content-Type': 'application/json'
-        }
+        },
+        body: JSON.stringify(requestBody)
       }
     );
 
-    if (response.status !== 200) {
+    if (response.status === 200) {
+      const responseData = await response.json() as SafeBrowsingResponse;
+      console.log('Google Safe Browsing API 响应:', responseData);
+      
+      if (responseData.matches && responseData.matches.length > 0) {
+        console.log('检测到不安全的域名:', domain);
+        return SecurityStatus.Unsafe;
+      }
+    } else if (response.status === 204) {
+      // 204 表示没有匹配的威胁
+      console.log('域名安全:', domain);
+      return SecurityStatus.Safe;
+    } else {
       console.error('Google Safe Browsing API 返回错误状态:', response.status);
       return SecurityStatus.Unknown;
     }
-
-    const responseData = await response.json() as SafeBrowsingResponse;
-    console.log('Google Safe Browsing API 响应:', responseData);
     
-    // 处理响应
-    if (responseData.matches && responseData.matches.length > 0) {
-      for (const match of responseData.matches) {
-        const fullHash = await generateSHA256Hash(match.threat.url);
-        
-        // 检查是否匹配任何表达式哈希
-        if (expressionHashes.includes(fullHash)) {
-          console.log('检测到不安全的域名:', domain);
-          return SecurityStatus.Unsafe;
-        }
-      }
-    }
-    
-    console.log('域名安全:', domain);
     return SecurityStatus.Safe;
   } catch (error) {
     console.error('Google Safe Browsing 检查失败:', error);
