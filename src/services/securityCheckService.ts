@@ -26,6 +26,14 @@ interface SafeBrowsingResponse {
   }>;
 }
 
+// 威胁类型描述
+const THREAT_TYPE_DESCRIPTIONS: Record<string, string> = {
+  'MALWARE': '包含恶意软件',
+  'SOCIAL_ENGINEERING': '试图诱骗访问者透露个人信息或下载软件',
+  'UNWANTED_SOFTWARE': '包含不需要的软件',
+  'POTENTIALLY_HARMFUL_APPLICATION': '包含潜在有害的应用程序'
+};
+
 // 生成 URL 表达式列表
 function generateUrlExpressions(url: string): string[] {
   const expressions: string[] = [];
@@ -140,6 +148,10 @@ async function checkWithGoogleSafeBrowsing(domain: string): Promise<SecurityStat
         // 检查威胁类型
         const threatTypes = responseData.matches.map(match => match.threatType);
         console.log('检测到的威胁类型:', threatTypes);
+        
+        // 获取威胁描述
+        const threatDescriptions = threatTypes.map(type => THREAT_TYPE_DESCRIPTIONS[type] || type);
+        console.log('威胁描述:', threatDescriptions);
         
         // 检查每个 URL 的威胁情况
         const unsafeUrls = responseData.matches.map(match => match.threat.url);
