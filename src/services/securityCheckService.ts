@@ -19,6 +19,28 @@ const getRandomDelay = () => Math.floor(Math.random() * 2000) + 1000;
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 2000;
 
+// 检测源配置
+const SECURITY_CHECK_SOURCES = {
+  VIRUSTOTAL: {
+    enabled: true,
+    apiKey: process.env.VIRUSTOTAL_API_KEY,
+    endpoint: 'https://www.virustotal.com/vtapi/v2/url/report'
+  },
+  URLSCAN: {
+    enabled: true,
+    apiKey: process.env.URLSCAN_API_KEY,
+    endpoint: 'https://urlscan.io/api/v1/search/'
+  }
+};
+
+// API 配置
+const API_CONFIG = {
+  GOOGLE_SAFE_BROWSING: {
+    apiKey: 'AIzaSyAwcApluz37f7q9F5yavmn3e1jcrF9eg2A',
+    endpoint: 'https://safebrowsing.googleapis.com/v4/threatMatches:find'
+  }
+};
+
 /**
  * 带重试的请求函数
  */
@@ -59,56 +81,134 @@ function isCacheValid(key: string): boolean {
 }
 
 /**
+ * 使用 VirusTotal 检查域名
+ */
+async function checkWithVirusTotal(domain: string): Promise<SecurityStatus> {
+  if (!SECURITY_CHECK_SOURCES.VIRUSTOTAL.enabled || !SECURITY_CHECK_SOURCES.VIRUSTOTAL.apiKey) {
+    return SecurityStatus.Unknown;
+  }
+
+  try {
+    const response = await fetchWithRetry(
+      `${SECURITY_CHECK_SOURCES.VIRUSTOTAL.endpoint}?apikey=${SECURITY_CHECK_SOURCES.VIRUSTOTAL.apiKey}&resource=${domain}`,
+      {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+
+    const data = await response.json();
+    if (data.positives > 0) {
+      return SecurityStatus.Unsafe;
+    }
+    return SecurityStatus.Safe;
+  } catch (error) {
+    console.error('VirusTotal 检查失败:', error);
+    return SecurityStatus.Unknown;
+  }
+}
+
+/**
+ * 使用 URLScan.io 检查域名
+ */
+async function checkWithURLScan(domain: string): Promise<SecurityStatus> {
+  if (!SECURITY_CHECK_SOURCES.URLSCAN.enabled || !SECURITY_CHECK_SOURCES.URLSCAN.apiKey) {
+    return SecurityStatus.Unknown;
+  }
+
+  try {
+    const response = await fetchWithRetry(
+      `${SECURITY_CHECK_SOURCES.URLSCAN.endpoint}?q=domain:${domain}`,
+      {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'API-Key': SECURITY_CHECK_SOURCES.URLSCAN.apiKey
+        }
+      }
+    );
+
+    const data = await response.json();
+    if (data.results && data.results.length > 0) {
+      const latestScan = data.results[0];
+      if (latestScan.verdicts && latestScan.verdicts.overall && latestScan.verdicts.overall.malicious) {
+        return SecurityStatus.Unsafe;
+      }
+    }
+    return SecurityStatus.Safe;
+  } catch (error) {
+    console.error('URLScan 检查失败:', error);
+    return SecurityStatus.Unknown;
+  }
+}
+
+/**
+ * 使用 Google Safe Browsing API 检查域名
+ */
+async function checkWithGoogleSafeBrowsing(domain: string): Promise<SecurityStatus> {
+  try {
+    const response = await fetchWithRetry(
+      `${API_CONFIG.GOOGLE_SAFE_BROWSING.endpoint}?key=${API_CONFIG.GOOGLE_SAFE_BROWSING.apiKey}`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          client: {
+            clientId: 'domain-security-checker',
+            clientVersion: '1.0.0'
+          },
+          threatInfo: {
+            threatTypes: ['MALWARE', 'SOCIAL_ENGINEERING', 'UNWANTED_SOFTWARE', 'POTENTIALLY_HARMFUL_APPLICATION'],
+            platformTypes: ['ANY_PLATFORM'],
+            threatEntryTypes: ['URL'],
+            threatEntries: [
+              { url: `http://${domain}` },
+              { url: `https://${domain}` }
+            ]
+          }
+        })
+      }
+    );
+
+    const data = await response.json();
+    
+    // 如果返回 200 且没有 matches，说明域名安全
+    if (response.status === 200 && !data.matches) {
+      return SecurityStatus.Safe;
+    }
+    
+    // 如果有 matches，说明域名不安全
+    if (response.status === 200 && data.matches) {
+      return SecurityStatus.Unsafe;
+    }
+    
+    return SecurityStatus.Unknown;
+  } catch (error) {
+    console.error('Google Safe Browsing 检查失败:', error);
+    return SecurityStatus.Unknown;
+  }
+}
+
+/**
  * 检查域名在 Google 透明度报告中的安全状态
  */
 export const checkDomainSecurity = async (domain: string): Promise<SecurityStatus> => {
   console.log(`正在检查域名安全状态: ${domain}`);
   
   // 检查缓存
-  const cacheKey = `google_${domain}`;
+  const cacheKey = `security_${domain}`;
   if (isCacheValid(cacheKey)) {
     console.log('使用缓存的安全状态');
     return cache.get(cacheKey)!.status as SecurityStatus;
   }
   
   try {
-    const response = await fetchWithRetry(
-      `https://transparencyreport.google.com/safe-browsing/search?url=${domain}&hl=zh_CN`,
-      {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
-          'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-          'Cache-Control': 'no-cache',
-          'Pragma': 'no-cache',
-          'Referer': 'https://transparencyreport.google.com/',
-          'Sec-Fetch-Dest': 'document',
-          'Sec-Fetch-Mode': 'navigate',
-          'Sec-Fetch-Site': 'same-origin',
-          'Sec-Fetch-User': '?1',
-          'Upgrade-Insecure-Requests': '1'
-        },
-        timeout: 30000 // 增加超时时间到30秒
-      }
-    );
-
-    const text = await response.text();
-    let status: SecurityStatus;
-    
-    // 更新页面内容解析逻辑
-    if (text.includes('未发现安全问题') || text.includes('No unsafe content found')) {
-      status = SecurityStatus.Safe;
-    } else if (text.includes('发现安全问题') || text.includes('Unsafe content found')) {
-      status = SecurityStatus.Unsafe;
-    } else if (text.includes('部分安全问题') || text.includes('Partially unsafe content')) {
-      status = SecurityStatus.PartiallySafe;
-    } else if (text.includes('检查中') || text.includes('Checking')) {
-      // 如果页面显示"检查中"，等待3秒后重试
-      await new Promise(resolve => setTimeout(resolve, 3000));
-      return checkDomainSecurity(domain);
-    } else {
-      status = SecurityStatus.Unknown;
-    }
+    // 使用 Google Safe Browsing API 检查
+    const status = await checkWithGoogleSafeBrowsing(domain);
     
     // 更新缓存
     cache.set(cacheKey, {
