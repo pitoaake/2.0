@@ -1,4 +1,4 @@
-import { SecurityStatus, SpamhausStatus } from '../types/domain';
+import { SecurityStatus, SpamhausStatus, DomainCheckResult } from '../types/domain';
 
 // 请求延迟时间（1-3秒）
 const getRandomDelay = () => Math.floor(Math.random() * 2000) + 1000;
@@ -28,10 +28,10 @@ interface SafeBrowsingResponse {
 
 // 威胁类型描述
 const THREAT_TYPE_DESCRIPTIONS: Record<string, string> = {
-  'MALWARE': '包含恶意软件',
-  'SOCIAL_ENGINEERING': '试图诱骗访问者透露个人信息或下载软件',
-  'UNWANTED_SOFTWARE': '包含不需要的软件',
-  'POTENTIALLY_HARMFUL_APPLICATION': '包含潜在有害的应用程序'
+  MALWARE: '恶意软件',
+  SOCIAL_ENGINEERING: '社交工程',
+  UNWANTED_SOFTWARE: '不需要的软件',
+  POTENTIALLY_HARMFUL_APPLICATION: '潜在有害应用'
 };
 
 // 生成 URL 表达式列表
@@ -96,109 +96,87 @@ async function fetchWithRetry(url: string, options: RequestInit, retries = MAX_R
 }
 
 /**
- * 使用 Google Safe Browsing API 检查域名
+ * 检查域名安全状态
+ * @param domain 要检查的域名
+ * @returns 域名检查结果
  */
-async function checkWithGoogleSafeBrowsing(domain: string): Promise<SecurityStatus> {
+export const checkWithGoogleSafeBrowsing = async (domain: string): Promise<DomainCheckResult> => {
+  if (!API_CONFIG.GOOGLE_SAFE_BROWSING.apiKey) {
+    throw new Error('未配置 Google Safe Browsing API 密钥');
+  }
+
   try {
-    // 准备要检查的 URL 列表
-    const urls = [
-      `http://${domain}`,
-      `https://${domain}`,
-      `http://www.${domain}`,
-      `https://www.${domain}`
-    ];
-    
-    // 准备请求体
+    // 构建请求体
     const requestBody = {
       client: {
-        clientId: "domain-security-checker",
-        clientVersion: "1.0.0"
+        clientId: 'domain-monitor',
+        clientVersion: '1.0.0'
       },
       threatInfo: {
-        threatTypes: [
-          "MALWARE",
-          "SOCIAL_ENGINEERING",
-          "UNWANTED_SOFTWARE",
-          "POTENTIALLY_HARMFUL_APPLICATION"
-        ],
-        platformTypes: ["ANY_PLATFORM"],
-        threatEntryTypes: ["URL"],
-        threatEntries: urls.map(url => ({ url }))
+        threatTypes: ['MALWARE', 'SOCIAL_ENGINEERING', 'UNWANTED_SOFTWARE', 'POTENTIALLY_HARMFUL_APPLICATION'],
+        platformTypes: ['ANY_PLATFORM'],
+        threatEntryTypes: ['URL'],
+        threatEntries: [
+          { url: `http://${domain}` },
+          { url: `https://${domain}` }
+        ]
       }
     };
-    
-    console.log('发送请求到 Google Safe Browsing API:', requestBody);
-    
-    const response = await fetchWithRetry(
-      `${API_CONFIG.GOOGLE_SAFE_BROWSING.endpoint}?key=${API_CONFIG.GOOGLE_SAFE_BROWSING.apiKey}`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(requestBody)
-      }
-    );
 
-    if (response.status === 200) {
-      const responseData = await response.json() as SafeBrowsingResponse;
-      console.log('Google Safe Browsing API 响应:', responseData);
-      
-      if (responseData.matches && responseData.matches.length > 0) {
-        // 检查威胁类型
-        const threatTypes = responseData.matches.map(match => match.threatType);
-        console.log('检测到的威胁类型:', threatTypes);
-        
-        // 获取威胁描述
-        const threatDescriptions = threatTypes.map(type => THREAT_TYPE_DESCRIPTIONS[type] || type);
-        console.log('威胁描述:', threatDescriptions);
-        
-        // 检查每个 URL 的威胁情况
-        const unsafeUrls = responseData.matches.map(match => match.threat.url);
-        console.log('检测到威胁的 URL:', unsafeUrls);
-        
-        // 如果所有 URL 都有威胁，则标记为不安全
-        if (responseData.matches.length === urls.length) {
-          console.log('所有URL都检测到威胁，标记为不安全');
-          return SecurityStatus.Unsafe;
-        }
-        
-        // 如果部分 URL 有威胁，则标记为部分不安全
-        console.log('部分URL检测到威胁，标记为部分不安全');
-        return SecurityStatus.PartiallySafe;
-      }
-    } else if (response.status === 204) {
-      // 204 表示没有匹配的威胁
-      console.log('域名安全: 未检测到任何威胁');
-      return SecurityStatus.Safe;
-    } else {
-      console.error('Google Safe Browsing API 返回错误状态:', response.status);
-      return SecurityStatus.Unknown;
+    // 发送请求
+    const response = await fetch(`${API_CONFIG.GOOGLE_SAFE_BROWSING.endpoint}?key=${API_CONFIG.GOOGLE_SAFE_BROWSING.apiKey}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(requestBody)
+    });
+
+    if (!response.ok) {
+      throw new Error(`API 请求失败: ${response.status} ${response.statusText}`);
     }
-    
-    // 如果没有匹配的威胁，返回安全状态
-    console.log('域名安全: 未检测到任何威胁');
-    return SecurityStatus.Safe;
-  } catch (error) {
-    console.error('Google Safe Browsing 检查失败:', error);
-    return SecurityStatus.Unknown;
-  }
-}
 
-/**
- * 检查域名在 Google 透明度报告中的安全状态
- */
-export const checkDomainSecurity = async (domain: string): Promise<SecurityStatus> => {
-  console.log(`正在检查域名安全状态: ${domain}`);
-  
-  try {
-    // 使用 Google Safe Browsing API 检查
-    const status = await checkWithGoogleSafeBrowsing(domain);
-    console.log(`域名 ${domain} 的安全状态:`, status);
-    return status;
+    const data = await response.json();
+
+    // 检查是否发现威胁
+    if (data.matches) {
+      const threats = data.matches.map((match: any) => ({
+        type: match.threatType,
+        description: THREAT_TYPE_DESCRIPTIONS[match.threatType] || match.threatType,
+        url: match.threat.url
+      }));
+
+      console.log('发现威胁:', threats);
+
+      // 如果所有 URL 都不安全，则标记为不安全
+      if (threats.length === 2) {
+        return {
+          domain,
+          securityStatus: SecurityStatus.Unsafe,
+          spamhausStatus: SpamhausStatus.Unknown,
+          checkTime: Date.now()
+        };
+      }
+
+      // 如果只有部分 URL 不安全，则标记为部分安全
+      return {
+        domain,
+        securityStatus: SecurityStatus.PartiallySafe,
+        spamhausStatus: SpamhausStatus.Unknown,
+        checkTime: Date.now()
+      };
+    }
+
+    // 没有发现威胁，标记为安全
+    return {
+      domain,
+      securityStatus: SecurityStatus.Safe,
+      spamhausStatus: SpamhausStatus.Unknown,
+      checkTime: Date.now()
+    };
   } catch (error) {
     console.error('检查域名安全状态时出错:', error);
-    return SecurityStatus.Unknown;
+    throw error;
   }
 };
 
