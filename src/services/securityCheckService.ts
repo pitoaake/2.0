@@ -162,12 +162,20 @@ async function checkWithGoogleSafeBrowsing(domain: string): Promise<SecurityStat
             clientVersion: '1.0.0'
           },
           threatInfo: {
-            threatTypes: ['MALWARE', 'SOCIAL_ENGINEERING', 'UNWANTED_SOFTWARE', 'POTENTIALLY_HARMFUL_APPLICATION'],
+            threatTypes: [
+              'MALWARE',
+              'SOCIAL_ENGINEERING',
+              'UNWANTED_SOFTWARE',
+              'POTENTIALLY_HARMFUL_APPLICATION',
+              'THREAT_TYPE_UNSPECIFIED'
+            ],
             platformTypes: ['ANY_PLATFORM'],
             threatEntryTypes: ['URL'],
             threatEntries: [
               { url: `http://${domain}` },
-              { url: `https://${domain}` }
+              { url: `https://${domain}` },
+              { url: `http://www.${domain}` },
+              { url: `https://www.${domain}` }
             ]
           }
         })
@@ -176,16 +184,45 @@ async function checkWithGoogleSafeBrowsing(domain: string): Promise<SecurityStat
 
     const data = await response.json();
     
-    // 如果返回 200 且没有 matches，说明域名安全
-    if (response.status === 200 && !data.matches) {
-      return SecurityStatus.Safe;
+    // 检查响应状态
+    if (response.status !== 200) {
+      console.error('Google Safe Browsing API 返回错误状态:', response.status);
+      return SecurityStatus.Unknown;
     }
-    
-    // 如果有 matches，说明域名不安全
-    if (response.status === 200 && data.matches) {
-      return SecurityStatus.Unsafe;
+
+    // 检查是否有匹配的威胁
+    if (data.matches) {
+      // 分析威胁类型
+      const threats = data.matches.map((match: any) => match.threatType);
+      console.log('检测到的威胁类型:', threats);
+
+      // 根据威胁类型判断安全状态
+      if (threats.includes('MALWARE') || threats.includes('SOCIAL_ENGINEERING')) {
+        return SecurityStatus.Unsafe;
+      } else if (threats.includes('UNWANTED_SOFTWARE') || threats.includes('POTENTIALLY_HARMFUL_APPLICATION')) {
+        return SecurityStatus.PartiallySafe;
+      }
     }
-    
+
+    // 如果没有匹配的威胁，检查域名是否可访问
+    try {
+      const availabilityCheck = await fetchWithRetry(
+        `https://${domain}`,
+        {
+          method: 'HEAD',
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+          }
+        }
+      );
+      
+      if (availabilityCheck.ok) {
+        return SecurityStatus.Safe;
+      }
+    } catch (error) {
+      console.log('域名可访问性检查失败:', error);
+    }
+
     return SecurityStatus.Unknown;
   } catch (error) {
     console.error('Google Safe Browsing 检查失败:', error);
