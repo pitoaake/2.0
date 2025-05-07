@@ -9,9 +9,10 @@ const AUTO_CHECK_INTERVAL = 15 * 60 * 1000;
 const STORAGE_KEY = 'domain-monitor-list';
 
 export const useDomainStore = () => {
-  // 使用 useRef 来保存定时器引用
+  // 使用 useRef 来保存定时器引用和检查状态
   const checkIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const isInitialCheckRef = useRef(false);
+  const isCheckingRef = useRef(false);
 
   // 从本地存储加载域名列表
   const [domains, setDomains] = useState<Domain[]>(() => {
