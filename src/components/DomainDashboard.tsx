@@ -85,6 +85,7 @@ export const DomainDashboard: React.FC = () => {
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
           <p className="text-gray-600 dark:text-gray-400">
             正在监控 {domains.length} 个域名
+            {domains.length > 0 && domains.map(domain => domain.name).join(', ')}
           </p>
           {lastChecked && (
             <p className="text-sm text-gray-500 dark:text-gray-400">
