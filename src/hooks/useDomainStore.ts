@@ -78,6 +78,12 @@ export const useDomainStore = () => {
             ? [...domain.history, historyEntry].slice(-20) // Keep only last 20 entries
             : domain.history;
         
+        console.log(`更新域名 ${domain.name} 状态:`, {
+          securityStatus,
+          spamhausStatus,
+          isChecking: false
+        });
+        
         return {
           ...domain,
           securityStatus,
@@ -105,18 +111,25 @@ export const useDomainStore = () => {
     if (!domainToCheck) return;
     
     try {
+      console.log(`开始检查域名: ${domainToCheck.name}`);
+      
       // 并行检查两个状态
       const [securityStatus, spamhausStatus] = await Promise.all([
         checkDomainSecurity(domainToCheck.name),
         checkSpamhausStatus(domainToCheck.name)
       ]);
       
+      console.log(`域名 ${domainToCheck.name} 检查完成:`, {
+        securityStatus,
+        spamhausStatus
+      });
+      
       updateDomainStatus(domainId, securityStatus, spamhausStatus);
     } catch (error) {
       console.error('检查域名时出错:', error);
       
       // Set to unknown on error
-      updateDomainStatus(domainId, SecurityStatus.Unknown, SpamhausStatus.Safe);
+      updateDomainStatus(domainId, SecurityStatus.Unknown, SpamhausStatus.Unknown);
     }
   }, [domains, updateDomainStatus]);
 
