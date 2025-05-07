@@ -9,6 +9,7 @@ export const useDomainStore = () => {
   const [domains, setDomains] = useState<Domain[]>([]);
   const [lastChecked, setLastChecked] = useState<number | null>(null);
   const [isChecking, setIsChecking] = useState(false);
+  const [checkStatus, setCheckStatus] = useState<string>('');
 
   // Add a new domain
   const addDomain = useCallback(async (domainName: string) => {
@@ -16,11 +17,11 @@ export const useDomainStore = () => {
     
     // Check if domain already exists
     if (domains.some(domain => domain.name.toLowerCase() === normalizedDomain)) {
-      console.log(`域名 ${normalizedDomain} 已存在`);
+      setCheckStatus(`域名 ${normalizedDomain} 已存在，无需重复添加`);
       return;
     }
     
-    console.log(`开始添加域名: ${normalizedDomain}`);
+    setCheckStatus(`开始添加域名: ${normalizedDomain}`);
     
     const newDomain: Domain = {
       id: Date.now().toString(),
@@ -36,7 +37,7 @@ export const useDomainStore = () => {
     setDomains(prev => [...prev, newDomain]);
     
     try {
-      console.log(`开始检查新添加的域名: ${normalizedDomain}`);
+      setCheckStatus(`正在检查域名 ${normalizedDomain} 的安全状态...`);
       
       // 立即检查新域名
       const [securityStatus, spamhausStatus] = await Promise.all([
@@ -44,10 +45,9 @@ export const useDomainStore = () => {
         checkSpamhausStatus(normalizedDomain)
       ]);
       
-      console.log(`域名 ${normalizedDomain} 检查完成:`, {
-        securityStatus,
-        spamhausStatus
-      });
+      setCheckStatus(`域名 ${normalizedDomain} 检查完成:
+        安全状态: ${securityStatus}
+        Spamhaus状态: ${spamhausStatus}`);
       
       // 更新域名状态
       setDomains(prev => prev.map(domain => 
@@ -70,6 +70,7 @@ export const useDomainStore = () => {
       setLastChecked(Date.now());
     } catch (error) {
       console.error('检查新域名时出错:', error);
+      setCheckStatus(`检查域名 ${normalizedDomain} 时出错: ${error.message}`);
       
       // 更新为未知状态
       setDomains(prev => prev.map(domain => 
@@ -88,8 +89,12 @@ export const useDomainStore = () => {
 
   // Remove a domain
   const removeDomain = useCallback((domainId: string) => {
+    const domain = domains.find(d => d.id === domainId);
+    if (domain) {
+      setCheckStatus(`已移除域名: ${domain.name}`);
+    }
     setDomains(prev => prev.filter(domain => domain.id !== domainId));
-  }, []);
+  }, [domains]);
 
   // Update domain status
   const updateDomainStatus = useCallback((
@@ -115,11 +120,9 @@ export const useDomainStore = () => {
             ? [...domain.history, historyEntry].slice(-20) // Keep only last 20 entries
             : domain.history;
         
-        console.log(`更新域名 ${domain.name} 状态:`, {
-          securityStatus,
-          spamhausStatus,
-          isChecking: false
-        });
+        setCheckStatus(`更新域名 ${domain.name} 状态:
+          安全状态: ${securityStatus}
+          Spamhaus状态: ${spamhausStatus}`);
         
         return {
           ...domain,
@@ -146,12 +149,12 @@ export const useDomainStore = () => {
     // Find the domain to check
     const domainToCheck = domains.find(d => d.id === domainId);
     if (!domainToCheck) {
-      console.log(`未找到域名 ID: ${domainId}`);
+      setCheckStatus(`未找到域名 ID: ${domainId}`);
       return;
     }
     
     try {
-      console.log(`开始检查域名: ${domainToCheck.name}`);
+      setCheckStatus(`开始检查域名: ${domainToCheck.name}`);
       
       // 并行检查两个状态
       const [securityStatus, spamhausStatus] = await Promise.all([
@@ -159,14 +162,14 @@ export const useDomainStore = () => {
         checkSpamhausStatus(domainToCheck.name)
       ]);
       
-      console.log(`域名 ${domainToCheck.name} 检查完成:`, {
-        securityStatus,
-        spamhausStatus
-      });
+      setCheckStatus(`域名 ${domainToCheck.name} 检查完成:
+        安全状态: ${securityStatus}
+        Spamhaus状态: ${spamhausStatus}`);
       
       updateDomainStatus(domainId, securityStatus, spamhausStatus);
     } catch (error) {
       console.error('检查域名时出错:', error);
+      setCheckStatus(`检查域名 ${domainToCheck.name} 时出错: ${error.message}`);
       
       // Set to unknown on error
       updateDomainStatus(domainId, SecurityStatus.Unknown, SpamhausStatus.Unknown);
@@ -176,27 +179,28 @@ export const useDomainStore = () => {
   // Check all domains
   const checkAllDomains = useCallback(async () => {
     if (isChecking) {
-      console.log('已有检查正在进行中，跳过本次检查');
+      setCheckStatus('已有检查正在进行中，跳过本次检查');
       return;
     }
     
     if (domains.length === 0) {
-      console.log('没有需要检查的域名');
+      setCheckStatus('没有需要检查的域名');
       return;
     }
     
-    console.log(`开始检查所有域名，共 ${domains.length} 个`);
+    setCheckStatus(`开始检查所有域名，共 ${domains.length} 个`);
     setIsChecking(true);
     
     try {
       // 串行检查所有域名，避免并发请求过多
       for (const domain of domains) {
-        console.log(`检查域名: ${domain.name}`);
+        setCheckStatus(`正在检查域名: ${domain.name}`);
         await checkDomain(domain.id);
       }
-      console.log('所有域名检查完成');
+      setCheckStatus('所有域名检查完成');
     } catch (error) {
       console.error('批量检查域名时出错:', error);
+      setCheckStatus(`批量检查域名时出错: ${error.message}`);
     } finally {
       setIsChecking(false);
     }
@@ -205,13 +209,13 @@ export const useDomainStore = () => {
   // 自动检查
   useEffect(() => {
     if (domains.length > 0) {
-      console.log('初始化检查所有域名');
+      setCheckStatus('初始化检查所有域名');
       checkAllDomains();
     }
     
     const interval = setInterval(() => {
       if (domains.length > 0) {
-        console.log('执行定期域名安全检查');
+        setCheckStatus('执行定期域名安全检查');
         checkAllDomains();
       }
     }, AUTO_CHECK_INTERVAL);
@@ -226,6 +230,7 @@ export const useDomainStore = () => {
     checkDomain,
     checkAllDomains,
     lastChecked,
-    isChecking
+    isChecking,
+    checkStatus
   };
 };
