@@ -32,3 +32,27 @@ export const isValidDomain = (domain: string): boolean => {
   const pattern = /^([a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/;
   return pattern.test(domain);
 };
+
+/**
+ * 验证域名格式
+ * @param domain 要验证的域名
+ * @returns 是否为有效域名
+ */
+export const validateDomain = (domain: string): boolean => {
+  const domainRegex = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9][a-z0-9-]{0,61}[a-z0-9]$/i;
+  return domainRegex.test(domain);
+};
+
+/**
+ * 格式化域名
+ * @param domain 要格式化的域名
+ * @returns 格式化后的域名
+ */
+export const formatDomain = (domain: string): string => {
+  // 移除协议前缀
+  domain = domain.replace(/^(https?:\/\/)?(www\.)?/, '');
+  // 移除末尾的斜杠
+  domain = domain.replace(/\/$/, '');
+  // 转换为小写
+  return domain.toLowerCase();
+};
