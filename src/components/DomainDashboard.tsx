@@ -1,7 +1,7 @@
 import React, { useState, useCallback } from 'react';
 import { useDomainStore } from '../hooks/useDomainStore';
 import { DomainCard } from './DomainCard';
-import { validateDomain } from '../utils/domainUtils';
+import { isValidDomain } from '../utils/domainUtils';
 import { toast } from 'react-hot-toast';
 
 export const DomainDashboard: React.FC = () => {
@@ -128,7 +128,7 @@ export const DomainDashboard: React.FC = () => {
                 value={domainName}
                 onChange={(e) => {
                   setDomainName(e.target.value);
-                  setIsValid(e.target.value.trim() === '' || validateDomain(e.target.value));
+                  setIsValid(e.target.value.trim() === '' || isValidDomain(e.target.value));
                 }}
                 placeholder="输入域名 (example.com)"
                 className={`w-full px-4 py-2 border rounded-md focus:outline-none focus:ring-2 
