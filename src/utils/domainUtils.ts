@@ -26,21 +26,13 @@ export const formatDate = (timestamp: number): string => {
 };
 
 /**
- * Validate a domain name format
- */
-export const isValidDomain = (domain: string): boolean => {
-  const pattern = /^([a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/;
-  return pattern.test(domain);
-};
-
-/**
  * 验证域名格式
  * @param domain 要验证的域名
  * @returns 是否为有效域名
  */
-export const validateDomain = (domain: string): boolean => {
-  const domainRegex = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9][a-z0-9-]{0,61}[a-z0-9]$/i;
-  return domainRegex.test(domain);
+export const isValidDomain = (domain: string): boolean => {
+  const pattern = /^([a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/;
+  return pattern.test(domain);
 };
 
 /**

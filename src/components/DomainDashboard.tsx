@@ -1,7 +1,9 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, ChangeEvent } from 'react';
 import { useDomainStore } from '../hooks/useDomainStore';
 import { DomainCard } from './DomainCard';
-import { isValidDomain } from '../utils/domainUtils';
+import { isValidDomain, formatDomain } from '../utils/domainUtils';
+import { SecurityStatus, SpamhausStatus, Domain } from '../types/domain';
+import { getStatusColor } from '../utils/domainUtils';
 import { toast } from 'react-hot-toast';
 
 export const DomainDashboard: React.FC = () => {
@@ -23,7 +25,7 @@ export const DomainDashboard: React.FC = () => {
   // 添加日志
   const addLog = useCallback((message: string) => {
     const timestamp = new Date().toLocaleTimeString();
-    setLogs(prev => [`[${timestamp}] ${message}`, ...prev].slice(0, 100));
+    setLogs((prev: string[]) => [`[${timestamp}] ${message}`, ...prev].slice(0, 100));
   }, []);
 
   // 显示提示
@@ -89,7 +91,7 @@ export const DomainDashboard: React.FC = () => {
   // 处理域名删除
   const handleRemove = useCallback((domainId: string) => {
     try {
-      const domain = domains.find(d => d.id === domainId);
+      const domain = domains.find((d: Domain) => d.id === domainId);
       if (domain) {
         addLog(`已移除域名: ${domain.name}`);
         removeDomain(domainId);
@@ -126,7 +128,7 @@ export const DomainDashboard: React.FC = () => {
               <input
                 type="text"
                 value={domainName}
-                onChange={(e) => {
+                onChange={(e: ChangeEvent<HTMLInputElement>) => {
                   setDomainName(e.target.value);
                   setIsValid(e.target.value.trim() === '' || isValidDomain(e.target.value));
                 }}
@@ -152,7 +154,7 @@ export const DomainDashboard: React.FC = () => {
         <div className="flex items-center justify-between mb-4">
           <div className="text-sm text-gray-600 dark:text-gray-400">
             正在监控 {domains.length} 个域名
-            {domains.length > 0 && domains.map(d => d.name).join(', ')}
+            {domains.length > 0 && domains.map((d: Domain) => d.name).join(', ')}
           </div>
           {lastChecked && (
             <div className="text-sm text-gray-600 dark:text-gray-400">
@@ -168,7 +170,7 @@ export const DomainDashboard: React.FC = () => {
             还没有添加域名。添加域名开始监控。
           </div>
         ) : (
-          domains.map(domain => (
+          domains.map((domain: Domain) => (
             <DomainCard
               key={domain.id}
               domain={domain}
@@ -182,7 +184,7 @@ export const DomainDashboard: React.FC = () => {
       <section className="bg-gray-50 dark:bg-gray-800 rounded-lg p-4">
         <h2 className="text-lg font-semibold mb-4">运行日志</h2>
         <div className="h-64 overflow-y-auto font-mono text-sm">
-          {logs.map((log, index) => (
+          {logs.map((log: string, index: number) => (
             <div key={index} className="py-1">
               {log}
             </div>
